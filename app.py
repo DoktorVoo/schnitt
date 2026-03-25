@@ -19,24 +19,23 @@ def save_to_buffer(cv2_img, name):
     return name, buf.read()
 
 def process_image(image_bytes, filename):
-    # Bild aus dem Speicher laden
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return []
 
-    # Vorbereitung für die Konturenerkennung
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Leichtes Weichzeichnen, um Rauschen zu reduzieren
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    # Schwellenwert: Alles was dunkel ist (schwarze Rahmen) wird weiß markiert
-    _, thresh = cv2.threshold(blurred, 60, 255, cv2.THRESH_BINARY_INV)
+    
+    # 1. Weißer Hintergrund wird entfernt
+    # Alles was hell (Papier) ist (>240), wird schwarz. Der Rest (Karten) wird weiß.
+    # Dadurch trennen sich Karten mit weißem Abstand dazwischen automatisch auf.
+    _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
 
     # Konturen finden
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Konturen von oben nach unten, dann links nach rechts sortieren
-    contours = sorted(contours, key=lambda c: (cv2.boundingRect(c)[1], cv2.boundingRect(c)[0]))
+    # Konturen sortieren (Grobe y-Zeilenbildung, dann x-Achse)
+    contours = sorted(contours, key=lambda c: (cv2.boundingRect(c)[1] // 200, cv2.boundingRect(c)[0]))
 
     cards = []
     card_count = 0
@@ -45,30 +44,44 @@ def process_image(image_bytes, filename):
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
 
-        # Filter: Ignoriere zu kleine Fragmente (Dreck/Ränder)
-        if w < 150 or h < 150:
+        # Rauschen und winzige Fragmente ignorieren
+        if w < 100 or h < 100:
             continue
 
-        # Bild der gefundenen Box ausschneiden
         extracted_region = img[y:y + h, x:x + w]
 
-        # Logik für Split-Karten: 
-        # Wenn die Breite deutlich größer ist als die Höhe, ist es ein Kartenpaar (Split)
-        if w > h * 1.2:
-            # In der Mitte teilen
-            mid = w // 2
-            left_part = extracted_region[:, 0:mid]
-            right_part = extracted_region[:, mid:w]
-
-            for part in (left_part, right_part):
+        # 2. Mathematischer Grid-Slicer (Raster-Erkennung)
+        # Wir ermitteln das beste Raster (Spalten x Zeilen) für diesen Kasten, 
+        # basierend auf dem typischen Magic-Karten-Verhältnis (Höhe ist ca. 1.4x die Breite).
+        best_cols = 1
+        best_rows = 1
+        best_error = 9999
+        
+        for cols in range(1, 5):
+            for rows in range(1, 5):
+                card_w = w / cols
+                card_h = h / rows
+                ratio = card_h / card_w
+                
+                # Wie weit weicht dieses Raster vom perfekten MTG-Kartenformat ab?
+                error = abs(ratio - 1.4)
+                
+                if error < best_error:
+                    best_error = error
+                    best_cols = cols
+                    best_rows = rows
+                    
+        # 3. Den gefundenen Kasten zerschneiden
+        step_x = w // best_cols
+        step_y = h // best_rows
+        
+        for r in range(best_rows):
+            for c in range(best_cols):
+                card_img = extracted_region[r*step_y:(r+1)*step_y, c*step_x:(c+1)*step_x]
+                
                 card_count += 1
-                name, data = save_to_buffer(part, f"{base_name}_{card_count}.jpg")
+                name, data = save_to_buffer(card_img, f"{base_name}_{card_count}.jpg")
                 cards.append((name, data))
-        else:
-            # Normale hochkant-Karte
-            card_count += 1
-            name, data = save_to_buffer(extracted_region, f"{base_name}_{card_count}.jpg")
-            cards.append((name, data))
 
     return cards
 
@@ -84,7 +97,6 @@ def index():
         with zipfile.ZipFile(file, 'r') as in_zip:
             with zipfile.ZipFile(output_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as out_zip:
                 for name in in_zip.namelist():
-                    # Nur Bilder verarbeiten, __MACOSX Ordner ignorieren
                     if name.lower().endswith(('.jpg', '.jpeg', '.png')) and '__MACOSX' not in name:
                         image_data = in_zip.read(name)
                         card_list = process_image(image_data, name)
