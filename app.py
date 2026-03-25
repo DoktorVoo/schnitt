@@ -23,8 +23,8 @@ def smart_trim(image):
     Zusätzlich wird der Rand um 1.5% 'rasiert', um Restweiß zu killen.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Erhöhte Toleranz für 'nicht ganz weißes' Papier
-    _, mask = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)
+    # Erhöhte Toleranz für 'nicht ganz weißes' Papier (225 statt 240)
+    _, mask = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY_INV)
     
     coords = cv2.findNonZero(mask)
     if coords is not None:
@@ -33,7 +33,6 @@ def smart_trim(image):
         margin_w = int(w * 0.015)
         margin_h = int(h * 0.015)
         
-        # Zuschneiden mit Sicherheitsabstand nach innen
         new_y = max(0, y + margin_h)
         new_h = max(1, h - (2 * margin_h))
         new_x = max(0, x + margin_w)
@@ -47,9 +46,9 @@ def process_image(image_bytes, filename):
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None: return []
 
-    # Wir suchen nach den Kartenblöcken auf der Seite
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY_INV)
+    # Etwas aggressiverer Schwellenwert für die initiale Erkennung
+    _, thresh = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY_INV)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     cards = []
@@ -60,18 +59,13 @@ def process_image(image_bytes, filename):
         x, y, w, h = cv2.boundingRect(cnt)
         if w < 200 or h < 200: continue
 
-        # Extrahiere den Block (kann 1 Karte oder 9 Karten sein)
         block = img[y:y + h, x:x + w]
-        
-        # Entscheiden: Ist das schon EINE Karte oder ein Gitter?
-        # Eine MTG Karte hat ein Verhältnis von ca. 1.39 bis 1.41
         current_ratio = h / w
         
-        # Wenn das Verhältnis schon fast 1.4 ist, NICHT weiter aufteilen!
+        # FIX: Der Fehler lag hier in der Zuweisung
         if 1.3 < current_ratio < 1.5:
             best_cols, best_rows = 1, 1
         else:
-            # Ansonsten Raster suchen
             best_cols, best_rows = 1, 1
             best_error = abs(current_ratio - 1.4)
             
@@ -80,17 +74,15 @@ def process_image(image_bytes, filename):
                     if cols == 1 and rows == 1: continue
                     ratio = (h / rows) / (w / cols)
                     error = abs(ratio - 1.4)
-                    # Kleiner Bonus für 1x1 oder bekannte Formate, um Fehl-Splits zu vermeiden
                     if error < best_error * 0.8: 
                         best_error = error
-                        best_cols, best_rows = cols
-                        best_rows = rows
+                        best_cols = cols  # Korrigiert: Nur best_cols zuweisen
+                        best_rows = rows  # Korrigiert: Nur best_rows zuweisen
 
         step_x, step_y = w // best_cols, h // best_rows
         for r in range(best_rows):
             for c in range(best_cols):
                 card_img = block[r*step_y:(r+1)*step_y, c*step_x:(c+1)*step_x]
-                # Jetzt das aggressive Trimming anwenden
                 card_img = smart_trim(card_img)
                 
                 card_count += 1
@@ -162,13 +154,13 @@ def merge_cards():
 def index():
     return '''
     <!doctype html>
-    <title>MTG Proxy Tool v3</title>
+    <title>MTG Proxy Tool v3.1</title>
     <style>
         body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: white; padding-top: 50px; }
         .box { background: #333; padding: 20px; border-radius: 10px; display: inline-block; width: 300px; margin: 10px; vertical-align: top; }
         input[type="submit"] { background: #007bff; color: white; border: none; padding: 10px; cursor: pointer; width: 100%; border-radius: 5px; }
     </style>
-    <h1>MTG Proxy Tool v3</h1>
+    <h1>MTG Proxy Tool v3.1</h1>
     <div class="box">
         <h3>1. Scans splitten</h3>
         <p><small>Zerschneidet Seiten & entfernt Ränder</small></p>
@@ -188,4 +180,4 @@ def index():
     '''
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000)
